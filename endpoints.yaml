@@ -1,0 +1,290 @@
+# NSE endpoint registry.  All entries below verified live on 2026-08-29.
+#
+# `generation` selects the transport adapter in bbnse/core/session.py:
+#   legacy  -> /api/<name>       original JSON API, still the majority
+#   nextapi -> /api/NextApi/...  new Next.js gateway; NSE is mid-migration
+#   archive -> nsearchives.nseindia.com file downloads (CSV/zip)
+#
+# NSE migrates pages between generations without notice. Re-verify with:
+#   python main.py verify-endpoints
+version: 1
+
+defaults:
+  host: https://www.nseindia.com
+  timeout: 25
+
+endpoints:
+
+  # ---------- WIRED UP (proof-of-concept trio) ----------
+  gainers:
+    generation: legacy
+    path: /api/live-analysis-variations
+    params: {index: gainers}
+    referer: /market-data/top-gainers-losers
+    # Response is keyed by index bucket, not a flat list.
+    buckets: [NIFTY, BANKNIFTY, NIFTYNEXT50, FOSec, allSec]
+    row_root: "{bucket}.data"
+    verified: {date: 2026-08-29, status: 200, bytes: 36211}
+
+  losers:
+    generation: legacy
+    path: /api/live-analysis-variations
+    params: {index: loosers}       # NSE spells it "loosers". Not a typo here.
+    referer: /market-data/top-gainers-losers
+    buckets: [NIFTY, BANKNIFTY, NIFTYNEXT50, FOSec, allSec]
+    row_root: "{bucket}.data"
+    verified: {date: 2026-08-29, status: 200, bytes: 36504}
+
+  week52_high:
+    generation: legacy
+    path: /api/live-analysis-data-52weekhighstock
+    referer: /market-data/52-week-high-equity-market
+    row_root: data
+    verified: {date: 2026-08-29, status: 200, rows: 132}
+
+  week52_low:
+    generation: legacy
+    path: /api/live-analysis-data-52weeklowstock
+    referer: /market-data/52-week-high-equity-market
+    row_root: data
+    verified: {date: 2026-08-29, status: 200, rows: 84}
+
+  large_deals:
+    generation: legacy
+    path: /api/snapshot-capital-market-largedeal
+    referer: /market-data/large-deals
+    row_root: BULK_DEALS_DATA
+    extra_roots: [BLOCK_DEALS_DATA, SHORT_DEALS_DATA]
+    verified: {date: 2026-08-29, status: 200, bulk_rows: 191}
+
+  # ---------- VERIFIED, NOT YET WIRED (phase 2) ----------
+  volume_spurts:
+    generation: legacy
+    path: /api/live-analysis-volume-gainers
+    referer: /market-data/volume-gainers-spurts
+    row_root: data
+    verified: {date: 2026-08-29, status: 200, rows: 25}
+
+  oi_spurts:
+    generation: legacy
+    path: /api/live-analysis-oi-spurts-underlyings
+    referer: /market-data/oi-spurts
+    row_root: data
+    verified: {date: 2026-08-29, status: 200, rows: 216}
+
+  price_band_hitters:
+    generation: legacy
+    path: /api/live-analysis-price-band-hitter
+    referer: /market-data/upper-band-hitters
+    row_root: upper.AllSec.data
+    verified: {date: 2026-08-29, status: 200, bytes: 99697}
+
+  advance_decline:
+    generation: legacy
+    path: /api/live-analysis-advance
+    referer: /market-data/advance
+    row_root: advance
+    verified: {date: 2026-08-29, status: 200, bytes: 524987}
+
+  most_active_value:
+    generation: legacy
+    path: /api/live-analysis-most-active-securities
+    params: {index: value}
+    referer: /market-data/most-active-equities
+    row_root: data
+    verified: {date: 2026-08-29, status: 200, rows: 20}
+
+  indices_all:
+    generation: legacy
+    path: /api/allIndices
+    referer: /market-data/live-market-indices
+    row_root: data
+    verified: {date: 2026-08-29, status: 200, rows: 139}
+
+  pre_open_cm:
+    generation: legacy
+    path: /api/market-data-pre-open
+    params: {key: ALL}
+    referer: /market-data/pre-open-market-cm-and-emerge-market
+    row_root: data
+    # 2 MB payload. Snapshot dedup matters here; see storage.raw_retention.
+    verified: {date: 2026-08-29, status: 200, rows: 2072, bytes: 2069128}
+
+  pre_open_fo:
+    generation: legacy
+    path: /api/market-data-pre-open
+    params: {key: FO}
+    referer: /market-data/pre-open-market-fno
+    row_root: data
+    verified: {date: 2026-08-29, status: 200, bytes: 214917}
+
+  new_listings:
+    generation: legacy
+    path: /api/new-listing-today
+    referer: /market-data/new-stock-exchange-listings-today
+    row_root: data
+    verified: {date: 2026-08-29, status: 200, note: "empty on non-trading days"}
+
+  etf:
+    generation: legacy
+    path: /api/etf
+    referer: /market-data/exchange-traded-funds-etf
+    row_root: data
+    verified: {date: 2026-08-29, status: 200, rows: 349}
+
+  most_active_contracts:
+    generation: legacy
+    path: /api/snapshot-derivatives-equity
+    params: {index: contracts, limit: 20}
+    referer: /market-data/most-active-contracts
+    row_root: volume.data
+    verified: {date: 2026-08-29, status: 200, bytes: 15333}
+
+  derivatives_watch:
+    generation: legacy
+    path: /api/liveEquity-derivatives
+    params: {index: nse50_fut}
+    referer: /market-data/equity-derivatives-watch
+    row_root: data
+    verified: {date: 2026-08-29, status: 200}
+
+  option_chain_contract_info:
+    generation: legacy
+    path: /api/option-chain-contract-info
+    params: {symbol: NIFTY}
+    referer: /option-chain
+    verified: {date: 2026-08-29, status: 200}
+
+  option_chain:
+    generation: legacy
+    path: /api/option-chain-v3
+    params: {type: Indices, symbol: NIFTY}
+    referer: /option-chain
+    # Returned [] on a Saturday. Re-verify during market hours.
+    verified: {date: 2026-08-29, status: 200, note: "empty outside market hours"}
+
+  fii_dii:
+    generation: legacy
+    path: /api/fiidiiTradeReact
+    referer: /reports/fii-dii
+    verified: {date: 2026-08-29, status: 200}
+
+  market_status:
+    generation: legacy
+    path: /api/marketStatus
+    referer: /
+    verified: {date: 2026-08-29, status: 200}
+
+  holiday_master:
+    generation: legacy
+    path: /api/holiday-master
+    params: {type: trading}
+    referer: /
+    verified: {date: 2026-08-29, status: 200, rows: 21}
+
+  daily_reports:
+    generation: legacy
+    path: /api/daily-reports
+    params: {key: favCapital}
+    referer: /all-reports
+    row_root: data
+    verified: {date: 2026-08-29, status: 200}
+
+  # ---------- NEW GATEWAY (NSE mid-migration) ----------
+  block_deals_v2:
+    generation: nextapi
+    path: /api/NextApi/apiClient/marketWatchApi
+    params: {functionName: getBlockDealsData}
+    referer: /market-data/live-equity-market
+    row_root: data
+    verified: {date: 2026-08-29, status: 200}
+
+  index_data_v2:
+    generation: nextapi
+    path: /api/NextApi/apiClient
+    params: {functionName: getIndexData, type: All}
+    referer: /market-data/live-equity-market
+    row_root: data
+    verified: {date: 2026-08-29, status: 200}
+
+  market_turnover_v2:
+    generation: nextapi
+    path: /api/NextApi/apiClient
+    params: {functionName: getMarketTurnoverSummary}
+    referer: /market-data/live-equity-market
+    row_root: data
+    verified: {date: 2026-08-29, status: 200}
+
+  # ---------- ARCHIVE FILES (universe + historical) ----------
+  universe_nifty500:
+    generation: archive
+    url: https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv
+    verified: {date: 2026-08-29, status: 200, rows: 500}
+
+  universe_fo:
+    generation: archive
+    url: https://nsearchives.nseindia.com/content/fo/fo_mktlots.csv
+    verified: {date: 2026-08-29, status: 200, rows: 217}
+
+  universe_equity_all:
+    generation: archive
+    url: https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv
+    verified: {date: 2026-08-29, status: 200, rows: 2559}
+
+  # ---------- Phase 3 (resolved 2026-09-01) ----------
+  # These 3 pages have no JS chunks that reference an /api/ path directly --
+  # the landing pages are Drupal link hubs (surveillance) or thin wrappers
+  # (SLB, CAS) whose page-specific bundle (not the shared jquery/bootstrap/
+  # nse-min bundles) was hiding under a `?v=` query string that an earlier
+  # ".js"-suffix-only scan missed. Once that bundle was identified and
+  # grepped for /api/ literals, all three resolved cleanly. See
+  # docs/endpoints.md > Unresolved categories (now "Phase 3, resolved").
+
+  # "Price Bands & Surveillance Actions" is a hub linking to three separate
+  # report pages, not one endpoint -- covered by gsm/asm/surveillance_price_bands.
+  gsm:
+    generation: legacy
+    path: /api/reportGSM
+    referer: /reports/gsm
+    row_root: null                          # payload is a bare list
+    verified: {date: 2026-09-01, status: 200, rows: 82, bytes: 21830}
+
+  asm:
+    generation: legacy
+    path: /api/reportASM
+    referer: /reports/asm
+    row_root: null                          # payload is {longterm, shortterm}
+    verified: {date: 2026-09-01, status: 200, longterm_rows: 144, shortterm_rows: 90, bytes: 66576}
+
+  surveillance_price_bands:
+    generation: legacy
+    path: /api/eqsurvactions
+    referer: /reports/price-band-changes
+    row_root: null                          # payload is a bare list
+    verified: {date: 2026-09-01, status: 200, rows: 6, bytes: 893}
+
+  # SLB's series is a rolling monthly code ("10" = Oct-2026), re-derived from
+  # slb_series_master's filter.series.key each poll -- see fetchers/slb.py.
+  slb_series_master:
+    generation: legacy
+    path: /api/live-analysis-slb-series-master
+    referer: /market-data/securities-lending-and-borrowing
+    row_root: null
+    verified: {date: 2026-09-01, status: 200, bytes: 1207}
+
+  slb:
+    generation: legacy
+    path: /api/live-analysis-slb
+    params: {series: "10"}                  # overwritten per-poll with the current key
+    referer: /market-data/securities-lending-and-borrowing
+    row_root: data
+    verified: {date: 2026-09-01, status: 200, rows: 23, bytes: 9544}
+
+  closing_auction:
+    generation: nextapi
+    path: /api/NextApi/apiClient/casApi
+    params: {functionName: getCASData}
+    referer: /market-data/closing-auction-session
+    row_root: data
+    verified: {date: 2026-09-01, status: 200, rows: 0, bytes: 155,
+              note: "empty outside the CAS window near close; endpoint and shape confirmed via the Next.js bundle's column definitions"}

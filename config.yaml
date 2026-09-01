@@ -1,0 +1,389 @@
+# Bull Bear NSE Data Harvest -- single tuning file.
+# Everything that decides "is this important?" lives here. No code changes needed.
+
+app:
+  timezone: Asia/Kolkata
+  db_url: sqlite:///data/bbnse.sqlite3
+  log_level: INFO
+  log_dir: logs
+  report_dir: reports_out
+
+# ---------------------------------------------------------------------------
+# Alert universe. Immediate alerts fire only for symbols in this set.
+# Reports still cover the whole market regardless of what is set here.
+# ---------------------------------------------------------------------------
+universe:
+  mode: fo_plus_nifty500     # fo_plus_nifty500 | nifty500 | nifty200 | all | watchlist
+  refresh_days: 7            # re-download constituent lists this often
+  watchlist_file: universe/watchlist.txt   # used only when mode: watchlist
+  # Symbols here always alert, regardless of mode.
+  always_include: []
+  # Symbols here never alert, regardless of mode.
+  never_include: []
+
+# ---------------------------------------------------------------------------
+# HTTP transport / anti-blocking
+# ---------------------------------------------------------------------------
+http:
+  # curl_cffi impersonates Chrome at the TLS layer, which is what NSE's Akamai
+  # edge actually fingerprints. Under plain "requests" the homepage bootstrap
+  # returns 403 (the API calls survive on cookies alone, but that is luck, not
+  # design). Fall back to "requests" only if curl-cffi cannot be installed.
+  backend: curl_cffi
+  # Rolling alias for the newest Chrome profile curl_cffi ships. Pin to a
+  # specific build (e.g. chrome131) only if a future profile misbehaves.
+  impersonate: chrome
+  bootstrap_url: https://www.nseindia.com/
+  # Re-bootstrap this often. NSE's ak_bmsc cookie lives 2h and bm_sz 4h, so
+  # 30 min is comfortably inside the window. It was 600s, but each bootstrap
+  # also re-warms every landing page, and at 18 fetchers that overhead was
+  # ~30% of all traffic. See `python main.py load-estimate`.
+  session_max_age_sec: 1800
+  connect_timeout: 10
+  read_timeout: 25
+  # Politeness: every request sleeps a random amount in this range first.
+  jitter_sec: [0.4, 1.2]
+  retry:
+    max_attempts: 4
+    backoff_base_sec: 2.0       # 2, 4, 8, 16 with jitter
+    backoff_max_sec: 60
+    # These statuses trigger a full session re-bootstrap, not just a retry.
+    rebootstrap_on: [401, 403]
+    retry_on: [408, 429, 500, 502, 503, 504]
+
+# ---------------------------------------------------------------------------
+# Polling cadence. Tiers are gated by the live NSE trading calendar, so
+# holidays and weekends automatically drop to zero polls.
+# ---------------------------------------------------------------------------
+schedule:
+  market:
+    pre_open_start: "09:00"
+    open: "09:15"
+    close: "15:30"
+    post_close_end: "16:00"
+  # interval_sec applies only inside the named window.
+  # Two intraday tiers, not one: `live_fast` is for things that matter
+  # minute-to-minute, `live_slow` for slower-moving metrics and heavy
+  # payloads. Putting advance_decline (525 KB) on the fast tier would burn
+  # ~100 MB/day re-fetching a ratio that barely moves. Run
+  # `python main.py load-estimate` after changing anything here.
+  tiers:
+    live_fast:     {interval_sec: 120, window: market_hours}
+    live_slow:     {interval_sec: 300, window: market_hours}
+    pre_open:      {interval_sec: 30,  window: pre_open}
+    session_close: {interval_sec: 300, window: post_close}
+    daily:         {at: "18:30"}      # bulk/block deals publish after close
+    daily_late:    {at: "19:45"}      # FII/DII
+    weekly:        {day: sat, at: "08:00"}
+    monthly:       {day: 1, at: "08:30"}
+  categories:
+    # --- fast: minute-to-minute significance ---
+    gainers:               live_fast
+    losers:                live_fast
+    week52_high:           live_fast
+    week52_low:            live_fast
+    price_band_hitters:    live_fast
+    oi_spurts:             live_fast
+    # CAS activates only in the final minutes before close; fast polling is
+    # what has any chance of catching it inside that narrow window.
+    closing_auction:       live_fast
+    # --- slow: moves gradually, or a large payload, or both ---
+    volume_spurts:         live_slow
+    advance_decline:       live_slow
+    most_active_value:     live_slow
+    indices_all:           live_slow
+    derivatives_watch:     live_slow
+    most_active_contracts: live_slow
+    option_chain:          live_slow
+    etf:                   live_slow
+    slb:                   live_slow
+    # --- pre-open window only ---
+    pre_open_cm:           pre_open
+    pre_open_fo:           pre_open
+    # --- once a day ---
+    new_listings:          daily
+    large_deals:           daily
+    daily_reports:         daily
+    gsm:                   daily
+    asm:                   daily
+    surveillance_price_bands: daily
+    fii_dii:               daily_late
+  # On an intermittent laptop: backfill daily/EOD jobs missed while powered off.
+  catchup:
+    enabled: true
+    max_lookback_days: 5
+
+# ---------------------------------------------------------------------------
+# IMPORTANCE RULES
+# severity: info | notable | critical
+# Every rule can be disabled with `enabled: false`.
+# ---------------------------------------------------------------------------
+rules:
+
+  # --- debounce / re-alert behaviour, applies to every rule ---
+  debounce:
+    # Alert only on transition INTO a state. Staying in it stays silent.
+    remind_after_hours: 3        # one reminder if still true after N hours; 0 disables
+    max_reminders: 1
+    # Re-alert early if the value moves materially past where it first fired.
+    escalate_on_pct_move: 5.0
+    # Drop an open state if unseen for this many consecutive polls.
+    close_after_missed_polls: 3
+    # Ceiling on alerts per symbol per day, across all categories. Stops one
+    # heavily-churned name (prop desks doing 38 bulk deals in a session) from
+    # monopolising the stream. Reports still show every underlying row.
+    # Set 0 to disable.
+    max_alerts_per_symbol_per_day: 8
+    # Intraday rules reset at each session open.
+    reset_intraday_at_open: true
+
+  # --- cross-feed correlation -------------------------------------------
+  # NSE reports the same real-world event through several feeds. Signals that
+  # share a dedup_key, sit in the same group, and land inside the window
+  # collapse into one alert tagged "also in: <feed>". See processors/correlate.py.
+  cross_feed_dedup:
+    enabled: true
+    window_minutes: 30
+    # Let a later feed through if it reports HIGHER severity than the first --
+    # a mover that subsequently hits its circuit is genuinely new information.
+    escalate_on_higher_severity: true
+    # ...and also when a more specific feed outranks the incumbent even at
+    # equal severity. "Locked at its circuit" says something that "up 20%"
+    # does not, and dedup_priority is what encodes that ranking.
+    escalate_on_higher_priority: true
+    # Only categories inside the same group are ever compared. Adding a new
+    # Phase-2 category to an existing overlap is an edit here, not in code.
+    groups:
+      # One trade published in both the bulk and block feeds.
+      deals: [large_deals]
+      # One stock moving hard shows up as a gainer, a volume spurt, and at
+      # its price band. Keyed on the symbol, so all three corroborate.
+      equity_move: [gainers, losers, volume_spurts, price_band_hitters,
+                    most_active_value]
+      # One contract's OI surge appears across the derivatives feeds.
+      derivatives: [oi_spurts, derivatives_watch, most_active_contracts,
+                    option_chain]
+      # Deliberately NOT grouped: week52_high / week52_low. A fresh 52-week
+      # extreme is categorically different information from "moved 5% today",
+      # so it should alert alongside a gainers alert, not collapse into it.
+      # Move them into equity_move if you disagree.
+
+  gainers_losers:
+    enabled: true
+    # Fires when a universe symbol moves beyond these in either direction.
+    pct_move_notable: 5.0
+    pct_move_critical: 9.0
+    # Ignore illiquid noise.
+    min_traded_value_cr: 5.0
+    # Which response buckets to evaluate.
+    buckets: [NIFTY, BANKNIFTY, NIFTYNEXT50, FOSec, allSec]
+
+  week52:
+    enabled: true
+    # A fresh high/low is inherently notable; escalate when it clears the old
+    # extreme by a wide margin.
+    breakout_margin_pct_critical: 3.0
+    # Skip symbols whose new extreme barely differs from the previous one.
+    min_margin_pct: 0.0
+    min_ltp: 20.0                # ignore penny stocks
+    severity_high: notable
+    severity_low: notable
+
+  large_deals:
+    enabled: true
+    # Deal value = qty * weighted-avg price, in INR crore.
+    value_cr_notable: 10.0
+    value_cr_critical: 50.0
+    # Alert on any deal by these clients regardless of size (substring match).
+    watch_clients: []
+    # Unlike intraday rules, deals ignore the alert universe by default: a big
+    # deal in a smallcap is exactly what you want to hear about, and the value
+    # threshold already handles noise. Set true to restrict to the universe.
+    respect_universe: false
+    deal_types: [BULK, BLOCK, SHORT]
+    # Block deals are pre-negotiated and usually larger; separate floor.
+    block_value_cr_notable: 25.0
+
+  volume_spurts:
+    enabled: true
+    # NSE supplies week1volChange as a MULTIPLE (6.91 = 6.91x), not a percent.
+    volume_vs_week1_avg_multiple: 3.0
+    volume_vs_week2_avg_multiple: 3.0
+    critical_multiple: 6.0
+    min_traded_value_cr: 2.0        # turnover field is LAKH, converted to cr
+
+  oi_spurts:
+    enabled: true
+    # NSE's "avgInOI" field is actually a percent change, not an average --
+    # verified against ATHERENERG (15621-5590)/5590*100 = 179.45, matching
+    # the raw field exactly. See fetchers/oi_spurts.py.
+    oi_change_pct_notable: 20.0
+    oi_change_pct_critical: 40.0
+    min_oi_contracts: 5000          # ignore illiquid contracts (12 -> 48 = "300%")
+
+  price_band:
+    enabled: true
+    alert_on: [upper, lower]        # 'both' is also available
+    severity: critical              # a circuit lock is a liquidity event
+    min_ltp: 20.0
+    # NB: this feed reports turnover in CRORE and volume in LAKH shares,
+    # unlike gainers (lakh) and most_active (rupees). See docs/endpoints.md.
+
+  advance_decline:
+    enabled: true
+    ratio_extreme_bullish: 3.0      # advances:declines
+    ratio_extreme_bearish: 0.33
+    min_total: 100                  # ignore the thin first minutes
+
+  most_active:
+    enabled: true
+    # totalTradedValue arrives in RUPEES on this endpoint; converted to crore.
+    min_traded_value_cr: 100.0
+    critical_value_cr: 500.0
+
+  new_listings:
+    enabled: true
+    severity: notable
+    # No universe filter: a stock cannot be an index constituent on day one.
+
+  indices:
+    enabled: true
+    # Index moves are market events; thresholds are far tighter than equities.
+    pct_move_notable: 1.0
+    pct_move_critical: 2.0
+    # 139 indices are published and most are narrow sector slices that move
+    # together. Only these are evaluated. Names or symbols both match.
+    watch:
+      - NIFTY 50
+      - NIFTY BANK
+      - NIFTY NEXT 50
+      - NIFTY MIDCAP 100
+      - NIFTY SMALLCAP 100
+      - INDIA VIX
+
+  etf:
+    enabled: true
+    # Price diverging from NAV is the ETF-specific signal; plain price moves
+    # are just the underlying index and are covered by the indices rule.
+    premium_discount_pct: 1.5
+    critical_premium_pct: 3.0
+    min_traded_value_cr: 1.0        # trdVal arrives in RUPEES, converted
+
+  pre_open:
+    enabled: true
+    # Looser than intraday: pre-open gaps are larger by nature (auction-
+    # discovered, not continuous). Shared by pre_open_cm and pre_open_fo.
+    pct_move_notable: 4.0
+    pct_move_critical: 8.0
+    min_value_cr: 1.0               # ignore gaps on negligible pre-open turnover
+    # Persistence filter: only rows moving at least this much are written to
+    # the observation table (2072 rows/poll otherwise). totalTurnover is
+    # RUPEES on this feed, converted to crore. See fetchers/pre_open.py.
+    persist_min_pct_move: 2.0
+
+  derivatives_watch:
+    enabled: true
+    pct_move_notable: 3.0
+    pct_move_critical: 6.0
+
+  most_active_contracts:
+    enabled: true
+    # NOTE: totalTurnover/premiumTurnover units are UNVERIFIED on this
+    # endpoint (see fetchers/derivatives.py) -- the rule below uses only
+    # pChange (percent) and openInterest (contracts), never a rupee
+    # threshold. Re-verify during market hours, then this comment can go.
+    pct_move_notable: 25.0
+    pct_move_critical: 50.0
+    top_n_by_turnover: 10           # NSE's own ranking, not a verified amount
+    min_open_interest: 0
+
+  option_chain:
+    enabled: true
+    # PCR (put/call OI ratio) is dimensionless, so it is unaffected by the
+    # unverified openInterest unit on this endpoint -- see
+    # fetchers/option_chain.py. Endpoint returns {} outside market hours.
+    pcr_bullish: 1.5
+    pcr_bearish: 0.6
+    min_total_oi: 100000
+
+  fii_dii:
+    enabled: true
+    # buyValue/sellValue/netValue are the one feed already in CRORE.
+    net_cr_notable: 2000.0
+    net_cr_critical: 5000.0
+
+  daily_reports:
+    enabled: true
+    severity: info
+    # Empty = alert once per newly published report of any kind.
+    watch_reports: []
+
+  # --- Phase 3: originally-unresolved categories ---
+  gsm:
+    enabled: true
+    severity: notable
+    # No thresholds: entering/leaving a stage is inherently the event.
+
+  asm:
+    enabled: true
+    severity: notable
+    terms: [longterm, shortterm]
+
+  surveillance_price_bands:
+    enabled: true
+    severity: critical      # a tightened band is a live liquidity constraint
+
+  slb:
+    enabled: true
+    # spread_pct and annualised_yield_pct are the only unit-verified numeric
+    # fields on this endpoint -- see fetchers/slb.py. turnOver/transactionValue
+    # are carried through for the reports but never thresholded.
+    spread_pct_notable: 3.0
+    spread_pct_critical: 6.0
+    yield_pct_notable: 8.0
+
+  closing_auction:
+    enabled: true
+    pct_move_notable: 5.0
+    pct_move_critical: 10.0
+
+# ---------------------------------------------------------------------------
+# Notifications
+# ---------------------------------------------------------------------------
+notifiers:
+  # Order matters: alerts go to every enabled channel.
+  console:
+    enabled: true
+  telegram:
+    enabled: false             # flip to true once .env has token + chat id
+    # Only send alerts at or above this severity.
+    min_severity: notable
+    parse_mode: HTML
+    # Hard ceiling so a data glitch cannot spam you.
+    rate_limit_per_minute: 20
+    send_reports_as_document: true
+  email:
+    enabled: false             # stub -- see notifiers/README
+  discord:
+    enabled: false             # stub
+
+# ---------------------------------------------------------------------------
+# Storage
+# ---------------------------------------------------------------------------
+storage:
+  # Raw payloads are gzipped and content-hashed; identical consecutive
+  # snapshots are not re-stored. Matters most for the 2 MB pre-open feed.
+  keep_raw_snapshots: true
+  raw_retention_days: 30
+  # Normalized rows are what reports read, so they are kept much longer.
+  observation_retention_days: 400
+
+# ---------------------------------------------------------------------------
+# Health monitoring
+# ---------------------------------------------------------------------------
+health:
+  # Alert if a fetcher fails this many times consecutively.
+  consecutive_failure_alert: 3
+  # Alert if a category that should have updated has not, in this many minutes.
+  staleness_alert_minutes: 90
+  severity: critical

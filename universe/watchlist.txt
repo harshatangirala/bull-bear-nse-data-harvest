@@ -1,0 +1,1 @@
+# One NSE symbol per line. Used only when universe.mode: watchlist

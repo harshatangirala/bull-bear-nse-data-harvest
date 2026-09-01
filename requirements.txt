@@ -1,0 +1,24 @@
+requests>=2.32
+PyYAML>=6.0
+SQLAlchemy>=2.0
+APScheduler>=3.10
+Jinja2>=3.1
+python-dotenv>=1.0
+tenacity>=8.2
+rich>=13.7
+# Chrome TLS impersonation. Required for the default http.backend: curl_cffi
+# -- without it the homepage bootstrap 403s. See docs/endpoints.md section 1.
+curl-cffi>=0.7
+
+# Dashboard (streamlit run dashboard.py). Pinned >= the versions this was
+# built against: st.dataframe's Styler.applymap path and use_container_width
+# both changed behavior in these exact versions -- see dashboard.py's own
+# comments for what broke and why.
+streamlit>=1.59
+pandas>=3.0
+plotly>=6.0
+
+# Postgres driver, needed only when BBNSE_DB_URL points at a hosted database
+# (e.g. Neon) instead of the default local SQLite file -- see README >
+# Dashboard > Sharing a live link. Harmless to install even if unused.
+psycopg2-binary>=2.9
