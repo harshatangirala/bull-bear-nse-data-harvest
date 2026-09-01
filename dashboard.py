@@ -45,6 +45,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+from sqlalchemy import text
 
 try:
     if "BBNSE_DB_URL" in st.secrets:
@@ -76,9 +77,21 @@ def get_dao() -> Dao:
 
 
 def _read_sql(dao: Dao, sql: str, params: dict) -> pd.DataFrame:
+    # sqlalchemy.text() is required, not optional: a raw SQL string handed
+    # straight to pandas skips SQLAlchemy's bind-param translation, so the
+    # ":start"/":end" placeholders below only happened to work against
+    # SQLite (whose DBAPI accepts ":name" as its own native paramstyle) --
+    # psycopg2's native style is "%(name)s", and every one of these queries
+    # raised a bare psycopg2.errors.SyntaxError on Postgres until this was
+    # wrapped in text(), which is why this needs to stay.
     try:
-        return pd.read_sql(sql, dao.engine, params=params)
-    except Exception:
+        return pd.read_sql(text(sql), dao.engine, params=params)
+    except Exception as exc:
+        # Broad on purpose (a fresh DB with no tables yet must not crash the
+        # page) but surfaced, not silent -- a bad query silently returning
+        # "no data" instead of erroring is exactly the bug that shipped here
+        # once already.
+        st.warning(f"Query failed, showing empty: {exc}", icon="⚠️")
         return pd.DataFrame()
 
 
